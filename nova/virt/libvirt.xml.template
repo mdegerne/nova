@@ -20,7 +20,7 @@
             <root>${root_device_name}</root>
     #else
         #set $disk_bus = 'virtio'
-            <type>hvm</type>
+            <type arch="x86_64" machine="pc">hvm</type>
     #end if
     #if $getVar('rescue', False)
         <kernel>${basepath}/kernel.rescue</kernel>
