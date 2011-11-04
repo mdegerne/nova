@@ -21,6 +21,7 @@ import glob
 import os
 import subprocess
 import sys
+import time
 
 from setuptools import find_packages
 from setuptools.command.sdist import sdist
@@ -39,6 +40,26 @@ except ImportError:
     print "  https://launchpad.net/python-distutils-extra >= 2.18"
 
 gettext.install('nova', unicode=1)
+
+TOPDIR = os.path.abspath(os.path.dirname(__file__))
+VFILE  = os.path.join(TOPDIR, 'nova', '__pistonversion__.py')
+
+args = filter(lambda x: x[0] != '-', sys.argv)
+command = args[1] if len(args) > 1 else ''
+
+if command == 'sdist':
+    PISTON_VERSION = os.environ['PISTON_VERSION']
+    with file(VFILE, 'w') as f:
+        f.write('''#!/usr/bin/env python\nVERSION = '%s'\n''' % PISTON_VERSION)
+elif command == 'develop':
+    PISTON_VERSION = time.strftime('9999.0.%Y%m%d%H%M%S', time.localtime())
+    with file(VFILE, 'w') as f:
+        f.write('''#!/usr/bin/env python\nVERSION = '%s'\n''' % PISTON_VERSION)
+elif command is None:
+    PISTON_VERSION = '9999999999-You_did_not_set_a_version'
+else:
+    assert os.path.exists(VFILE), 'version.py does not exist, please set PISTON_VERSION (or run make_version.py for dev purposes)'
+
 
 from nova.utils import parse_mailmap, str_dict_replace
 from nova import version
