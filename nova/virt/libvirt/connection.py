@@ -1347,7 +1347,8 @@ class LibvirtConnection(driver.ComputeDriver):
 
         """
 
-        if sys.platform.upper() != 'LINUX2':
+        if sys.platform.upper() != 'LINUX2' and \
+           sys.platform.upper() != 'LINUX3':
             return 0
 
         meminfo = open('/proc/meminfo').read().split()
@@ -1388,7 +1389,8 @@ class LibvirtConnection(driver.ComputeDriver):
 
         """
 
-        if sys.platform.upper() != 'LINUX2':
+        if sys.platform.upper() != 'LINUX2' and \
+           sys.platform.upper() != 'LINUX3':
             return 0
 
         m = open('/proc/meminfo').read().split()
