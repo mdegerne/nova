@@ -203,7 +203,8 @@ class LibvirtConnection(driver.ComputeDriver):
             return True
         except libvirt.libvirtError as e:
             if e.get_error_code() == libvirt.VIR_ERR_SYSTEM_ERROR and \
-               e.get_error_domain() == libvirt.VIR_FROM_REMOTE:
+               e.get_error_domain() in (libvirt.VIR_FROM_REMOTE,
+                       libvirt.VIR_FROM_RPC):
                 LOG.debug(_('Connection to libvirt broke'))
                 return False
             raise
@@ -866,7 +867,7 @@ class LibvirtConnection(driver.ComputeDriver):
                                   user_id=inst['user_id'],
                                   project_id=inst['project_id'])
 
-        root_fname = hashlib.sha1(disk_images['image_id']).hexdigest()
+        root_fname = hashlib.sha1(str(disk_images['image_id'])).hexdigest()
         size = FLAGS.minimum_root_size
 
         inst_type_id = inst['instance_type_id']
@@ -1347,8 +1348,7 @@ class LibvirtConnection(driver.ComputeDriver):
 
         """
 
-        if sys.platform.upper() != 'LINUX2' and \
-           sys.platform.upper() != 'LINUX3':
+        if sys.platform.upper() not in ['LINUX2', 'LINUX3']:
             return 0
 
         meminfo = open('/proc/meminfo').read().split()
@@ -1379,7 +1379,13 @@ class LibvirtConnection(driver.ComputeDriver):
         total = 0
         for dom_id in self._conn.listDomainsID():
             dom = self._conn.lookupByID(dom_id)
-            total += len(dom.vcpus()[1])
+            vcpus = dom.vcpus()
+            if vcpus is None:
+                # dom.vcpus is not implemented for lxc, but returning 0 for
+                # a used count is hardly useful for something measuring usage
+                total += 1
+            else:
+                total += len(vcpus[1])
         return total
 
     def get_memory_mb_used(self):
@@ -1389,8 +1395,7 @@ class LibvirtConnection(driver.ComputeDriver):
 
         """
 
-        if sys.platform.upper() != 'LINUX2' and \
-           sys.platform.upper() != 'LINUX3':
+        if sys.platform.upper() not in ['LINUX2', 'LINUX3']:
             return 0
 
         m = open('/proc/meminfo').read().split()

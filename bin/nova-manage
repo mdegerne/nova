@@ -88,10 +88,13 @@ from nova import rpc
 from nova import utils
 from nova import version
 from nova import vsa
+from nova.api.ec2 import admin
 from nova.api.ec2 import ec2utils
 from nova.auth import manager
 from nova.cloudpipe import pipelib
 from nova.compute import instance_types
+from nova.compute import task_states
+from nova.compute import vm_states
 from nova.db import migration
 from nova.volume import volume_types
 
@@ -175,8 +178,9 @@ class VpnCommands(object):
     def spawn(self):
         """Run all VPNs."""
         print "WARNING: This method only works with deprecated auth"
+        ctxt = context.get_admin_context()
         for p in reversed(self.manager.get_projects()):
-            if not self._vpn_for(p.id):
+            if self._vpn_for(ctxt, p.id):
                 print 'spawning %s' % p.id
                 self.pipe.launch_vpn_instance(p.id, p.project_manager_id)
                 time.sleep(10)
@@ -211,6 +215,9 @@ class VpnCommands(object):
                               network['id'],
                               {'vpn_public_address': ip,
                                'vpn_public_port': int(port)})
+
+    def _vpn_for(self, context, project_id):
+        return admin.AdminController()._vpn_for(context, project_id)
 
 
 class ShellCommands(object):
@@ -683,8 +690,10 @@ class FloatingIpCommands(object):
     @args('--ip_range', dest="range", metavar='<range>', help='IP range')
     def create(self, range):
         """Creates floating ips for zone by range"""
-        for address in netaddr.IPNetwork(range):
-            db.floating_ip_create(context.get_admin_context(),
+        addresses = netaddr.IPNetwork(range)
+        admin_context = context.get_admin_context()
+        for address in addresses.iter_hosts():
+            db.floating_ip_create(admin_context,
                                   {'address': str(address)})
 
     @args('--ip_range', dest="ip_range", metavar='<range>', help='IP range')
@@ -993,6 +1002,53 @@ class VmCommands(object):
         """Migrates a running instance to a new machine with storage data."""
 
         self._migration(ec2_id, dest, True)
+
+    @args('--host', dest='host', metavar='<host>', help='Host')
+    def resume_all(self, host=None):
+        """Suspends all running vms on the specified host (or all)."""
+        ctxt = context.get_admin_context()
+
+        if host is None:
+            instances = db.instance_get_all(ctxt)
+        else:
+            instances = db.instance_get_all_by_host(ctxt, host)
+
+        for instance in instances:
+            if instance['vm_state'] == vm_states.SUSPENDED:
+                db.instance_update(ctxt,
+                                   instance['id'],
+                                   {'task_state': task_states.RESUMING})
+                queue = db.queue_get_for(ctxt, FLAGS.compute_topic,
+                                         instance['host'])
+                params = {'instance_id': instance['id']}
+                kwargs = {'method': 'resume_instance', 'args': params}
+                rpc.cast(ctxt, queue, kwargs)
+
+    @args('--host', dest='host', metavar='<host>', help='Host')
+    def suspend_all(self, host=None):
+        """Suspends all running vms on the specified host (or all)."""
+        ctxt = context.get_admin_context()
+
+        if host is None:
+            instances = db.instance_get_all(ctxt)
+        else:
+            instances = db.instance_get_all_by_host(ctxt, host)
+
+        for instance in instances:
+            if instance['vm_state'] not in [vm_states.SUSPENDED,
+                                            vm_states.STOPPED,
+                                            vm_states.DELETED,
+                                            vm_states.ERROR]:
+                db.instance_update(ctxt,
+                                   instance['id'],
+                                   {'vm_state': vm_states.ACTIVE,
+                                    'task_state': task_states.SUSPENDING})
+                queue = db.queue_get_for(ctxt, FLAGS.compute_topic,
+                                         instance['host'])
+                params = {'instance_id': instance['id']}
+                kwargs = {'method': 'suspend_instance', 'args': params}
+                rpc.cast(ctxt, queue, kwargs)
+
 
 
 class ServiceCommands(object):
@@ -1810,6 +1866,7 @@ class ImageCommands(object):
             return new
         except Exception as exc:
             print _("Failed to register %(path)s: %(exc)s") % locals()
+            sys.exit(1)
 
     @args('--image', dest='image', metavar='<image>', help='Image')
     @args('--kernel', dest='kernel', metavar='<kernel>', help='Kernel')

@@ -309,6 +309,7 @@ class VlanNetworkTestCase(test.TestCase):
         db.fixed_ip_associate(mox.IgnoreArg(),
                               mox.IgnoreArg(),
                               mox.IgnoreArg(),
+                              mox.IgnoreArg(),
                               reserved=True).AndReturn('192.168.0.1')
         db.fixed_ip_update(mox.IgnoreArg(),
                            mox.IgnoreArg(),
@@ -320,6 +321,19 @@ class VlanNetworkTestCase(test.TestCase):
         network = dict(networks[0])
         network['vpn_private_address'] = '192.168.0.2'
         self.network.allocate_fixed_ip(None, 0, network, vpn=True)
+
+    def test_vpn_allocate_fixed_ip_no_network_id(self):
+        network = dict(networks[0])
+        network['vpn_private_address'] = '192.168.0.2'
+        network['id'] = None
+        context_admin = context.RequestContext('testuser', 'testproject',
+                is_admin=True)
+        self.assertRaises(exception.FixedIpNotFoundForNetwork,
+                self.network.allocate_fixed_ip,
+                context_admin,
+                0,
+                network,
+                vpn=True)
 
     def test_allocate_fixed_ip(self):
         self.mox.StubOutWithMock(db, 'fixed_ip_associate_pool')
@@ -729,6 +743,39 @@ class CommonNetworkTestCase(test.TestCase):
         args = [None, 'foo', cidr, None, 10, 256, 'fd00::/48', None, None,
                 None]
         self.assertTrue(manager.create_networks(*args))
+
+
+class TestRPCFixedManager(network_manager.RPCAllocateFixedIP,
+        network_manager.NetworkManager):
+    """Dummy manager that implements RPCAllocateFixedIP"""
+
+
+class RPCAllocateTestCase(test.TestCase):
+    """Tests nova.network.manager.RPCAllocateFixedIP"""
+    def setUp(self):
+        super(RPCAllocateTestCase, self).setUp()
+        self.rpc_fixed = TestRPCFixedManager()
+        self.context = context.RequestContext('fake', 'fake')
+
+    def test_rpc_allocate(self):
+        """Test to verify bug 855030 doesn't resurface.
+
+        Mekes sure _rpc_allocate_fixed_ip returns a value so the call
+        returns properly and the greenpool completes."""
+        address = '10.10.10.10'
+
+        def fake_allocate(*args, **kwargs):
+            return address
+
+        def fake_network_get(*args, **kwargs):
+            return {}
+
+        self.stubs.Set(self.rpc_fixed, 'allocate_fixed_ip', fake_allocate)
+        self.stubs.Set(self.rpc_fixed.db, 'network_get', fake_network_get)
+        rval = self.rpc_fixed._rpc_allocate_fixed_ip(self.context,
+                                                     'fake_instance',
+                                                     'fake_network')
+        self.assertEqual(rval, address)
 
 
 class TestFloatingIPManager(network_manager.FloatingIP,
