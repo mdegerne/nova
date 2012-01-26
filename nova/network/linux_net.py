@@ -383,22 +383,7 @@ def metadata_forward():
 
 def init_host():
     """Basic networking setup goes here."""
-    # NOTE(devcamcar): Cloud public SNAT entries and the default
-    # SNAT rule for outbound traffic.
-    iptables_manager.ipv4['nat'].add_rule('snat',
-                                          '-s %s -j SNAT --to-source %s' % \
-                                           (FLAGS.fixed_range,
-                                            FLAGS.routing_source_ip))
-
-    iptables_manager.ipv4['nat'].add_rule('POSTROUTING',
-                                          '-s %s -d %s -j ACCEPT' % \
-                                          (FLAGS.fixed_range, FLAGS.dmz_cidr))
-
-    iptables_manager.ipv4['nat'].add_rule('POSTROUTING',
-                                          '-s %(range)s -d %(range)s '
-                                          '-j ACCEPT' % \
-                                          {'range': FLAGS.fixed_range})
-    iptables_manager.apply()
+    pass
 
 
 def bind_floating_ip(floating_ip, check_exit_code=True):
