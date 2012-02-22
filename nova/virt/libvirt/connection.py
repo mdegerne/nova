@@ -1711,8 +1711,8 @@ class LibvirtConnection(driver.ComputeDriver):
                              FLAGS.live_migration_bandwidth)
 
         except Exception:
-            recover_method(ctxt, instance_ref, dest, block_migration)
-            raise
+            with utils.save_and_reraise_exception():
+                recover_method(ctxt, instance_ref, dest, block_migration)
 
         # Waiting for completion of live_migration.
         timer = utils.LoopingCall(f=None)
@@ -1779,20 +1779,17 @@ class LibvirtConnection(driver.ComputeDriver):
         # if image has kernel and ramdisk, just download
         # following normal way.
         if instance_ref['kernel_id']:
-            user = manager.AuthManager().get_user(instance_ref['user_id'])
-            project = manager.AuthManager().get_project(
-                instance_ref['project_id'])
             self._fetch_image(nova_context.get_admin_context(),
                               os.path.join(instance_dir, 'kernel'),
                               instance_ref['kernel_id'],
-                              user,
-                              project)
+                              instance_ref['user_id'],
+                              instance_ref['project_id'])
             if instance_ref['ramdisk_id']:
                 self._fetch_image(nova_context.get_admin_context(),
                                   os.path.join(instance_dir, 'ramdisk'),
                                   instance_ref['ramdisk_id'],
-                                  user,
-                                  project)
+                                  instance_ref['user_id'],
+                                  instance_ref['project_id'])
 
     def post_live_migration_at_destination(self, ctxt,
                                            instance_ref,
