@@ -688,25 +688,23 @@ class FloatingIpCommands(object):
     """Class for managing floating ip."""
 
     @staticmethod
-    def network_to_host_list(network):
-        """Return the list of host of a network.
-
-        If the network is empty and only has one host, then we consider it
-        has the host in the network.
+    def address_to_hosts(addresses):
         """
+        Iterate over hosts within a address range.
 
-        if network.size == 1:
-            yield network.ip
-        else:
-            for host in network.iter_hosts():
-                yield host
+        If an explicit range specifier is missing, the parameter is
+        interpreted as a specific individual address.
+        """
+        try:
+            return [netaddr.IPAddress(addresses)]
+        except ValueError:
+            return netaddr.IPNetwork(addresses).iter_hosts()
 
     @args('--ip_range', dest="range", metavar='<range>', help='IP range')
     def create(self, range):
         """Creates floating ips for zone by range"""
-        addresses = netaddr.IPNetwork(range)
         admin_context = context.get_admin_context()
-        for address in self.network_to_host_list(addresses):
+        for address in self.address_to_hosts(range):
             db.floating_ip_create(admin_context,
                                   {'address': str(address)})
 
