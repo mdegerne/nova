@@ -46,6 +46,8 @@ flags.DEFINE_string('networks_path', '$state_path/networks',
                     'Location to keep network config files')
 flags.DEFINE_string('public_interface', 'eth0',
                     'Interface for public IP addresses')
+flags.DEFINE_string('public_prefix', 32,
+                    'Routing prefix for public IP addresses')
 flags.DEFINE_string('dhcpbridge', _bin_file('nova-dhcpbridge'),
                         'location of nova-dhcpbridge')
 flags.DEFINE_string('routing_source_ip', '$my_ip',
@@ -388,7 +390,8 @@ def init_host():
 
 def bind_floating_ip(floating_ip, check_exit_code=True):
     """Bind ip to public interface."""
-    _execute('ip', 'addr', 'add', floating_ip,
+    _execute('ip', 'addr', 'add',
+            '%s/%s' % (floating_ip, FLAGS.public_prefix),
              'dev', FLAGS.public_interface,
              run_as_root=True, check_exit_code=check_exit_code)
     if FLAGS.send_arp_for_ha:
@@ -399,7 +402,8 @@ def bind_floating_ip(floating_ip, check_exit_code=True):
 
 def unbind_floating_ip(floating_ip):
     """Unbind a public ip from public interface."""
-    _execute('ip', 'addr', 'del', floating_ip,
+    _execute('ip', 'addr', 'del',
+            '%s/%s' % (floating_ip, FLAGS.public_prefix),
              'dev', FLAGS.public_interface, run_as_root=True)
 
 
