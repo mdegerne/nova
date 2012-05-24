@@ -366,8 +366,8 @@ class LibvirtConnection(driver.ComputeDriver):
                      </disk>""" % (device_path, mount_device)
         elif type == 'network':
             xml = """<disk type='network'>
-                         <driver name='qemu' type='raw' cache='writethrough'/>
-                         <source protocol='%s' name='%s'/>
+                         <driver name='qemu' type='raw'/>
+                         <source protocol='%s' name='%s:rbd_cache=1'/>
                          <target dev='%s' bus='virtio'/>
                      </disk>""" % (protocol, name, mount_device)
         virt_dom.attachDevice(xml)
