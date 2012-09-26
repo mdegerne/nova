@@ -827,6 +827,10 @@ class LibvirtDriver(driver.ComputeDriver):
 
         image_format = FLAGS.snapshot_image_format or source_format
 
+        # NOTE(bfilippov): save lvm as raw
+        if image_format == 'lvm':
+            image_format = 'raw'
+
         # NOTE(vish): glance forces ami disk format to be ami
         if base.get('disk_format') == 'ami':
             metadata['disk_format'] = 'ami'
@@ -846,7 +850,10 @@ class LibvirtDriver(driver.ComputeDriver):
                 virt_dom.managedSave(0)
 
         # Make the snapshot
-        libvirt_utils.create_snapshot(disk_path, snapshot_name)
+        snapshot = self.image_backend.snapshot(disk_path, snapshot_name,
+                                               image_type=source_format)
+
+        snapshot.create()
 
         # Export the snapshot to a raw image
         snapshot_directory = FLAGS.libvirt_snapshots_directory
@@ -854,11 +861,9 @@ class LibvirtDriver(driver.ComputeDriver):
         with utils.tempdir(dir=snapshot_directory) as tmpdir:
             try:
                 out_path = os.path.join(tmpdir, snapshot_name)
-                libvirt_utils.extract_snapshot(disk_path, source_format,
-                                               snapshot_name, out_path,
-                                               image_format)
+                snapshot.extract(out_path, image_format)
             finally:
-                libvirt_utils.delete_snapshot(disk_path, snapshot_name)
+                snapshot.delete()
                 # NOTE(dkang): because previous managedSave is not called
                 #              for LXC, _create_domain must not be called.
                 if FLAGS.libvirt_type != 'lxc':

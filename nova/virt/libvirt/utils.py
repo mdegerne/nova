@@ -190,6 +190,22 @@ def clear_logical_volume(path):
         bs /= 1024  # Limit to 3 iterations
 
 
+def logical_volume_info(path):
+    """Get logical volume info.
+
+    :param path: logical volume path
+    """
+    out, err = execute('lvs', '-o', 'vg_all,lv_all',
+                       '--separator', '|', path, run_as_root=True)
+
+    info = [line.split('|') for line in out.splitlines()]
+
+    if len(info) != 2:
+        raise RuntimeError(_("Path %s must be LVM logical volume") % path)
+
+    return dict(zip(*info))
+
+
 def remove_logical_volumes(*paths):
     """Remove one or more logical volume."""
 
