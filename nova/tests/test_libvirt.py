@@ -1261,6 +1261,46 @@ class LibvirtConnTestCase(test.TestCase):
         self.assertEquals(snapshot['disk_format'], 'raw')
         self.assertEquals(snapshot['name'], snapshot_name)
 
+    def test_lxc_snapshot_in_raw_format(self):
+        self.flags(libvirt_snapshots_directory='./',
+                   libvirt_type='lxc')
+
+        # Start test
+        image_service = nova.tests.image.fake.FakeImageService()
+
+        # Assuming that base image already exists in image_service
+        instance_ref = db.instance_create(self.context, self.test_instance)
+        properties = {'instance_id': instance_ref['id'],
+                      'user_id': str(self.context.user_id)}
+        snapshot_name = 'test-snap'
+        sent_meta = {'name': snapshot_name, 'is_public': False,
+                     'status': 'creating', 'properties': properties}
+        # Create new image. It will be updated in snapshot method
+        # To work with it from snapshot, the single image_service is needed
+        recv_meta = image_service.create(context, sent_meta)
+
+        self.mox.StubOutWithMock(libvirt_driver.LibvirtDriver, '_conn')
+        libvirt_driver.LibvirtDriver._conn.lookupByName = self.fake_lookup
+        self.mox.StubOutWithMock(libvirt_driver.utils, 'execute')
+        libvirt_driver.utils.execute = self.fake_execute
+        self.stubs.Set(libvirt_driver.libvirt_utils, 'disk_type', 'raw')
+
+        def convert_image(source, dest, out_format):
+            libvirt_driver.libvirt_utils.files[dest] = ''
+
+        images.convert_image = convert_image
+
+        self.mox.ReplayAll()
+
+        conn = libvirt_driver.LibvirtDriver(False)
+        conn.snapshot(self.context, instance_ref, recv_meta['id'])
+
+        snapshot = image_service.show(context, recv_meta['id'])
+        self.assertEquals(snapshot['properties']['image_state'], 'available')
+        self.assertEquals(snapshot['status'], 'active')
+        self.assertEquals(snapshot['disk_format'], 'raw')
+        self.assertEquals(snapshot['name'], snapshot_name)
+
     def test_snapshot_in_qcow2_format(self):
         self.flags(snapshot_image_format='qcow2',
                    libvirt_snapshots_directory='./')
