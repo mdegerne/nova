@@ -48,6 +48,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import uuid
 
 from eventlet import greenthread
@@ -253,6 +254,10 @@ MIN_LIBVIRT_VERSION = (0, 9, 6)
 # When the above version matches/exceeds this version
 # delete it & corresponding code using it
 MIN_LIBVIRT_HOST_CPU_VERSION = (0, 9, 10)
+# Live snapshot requirements
+REQ_HYPERVISOR_LIVESNAPSHOT = "QEMU"
+MIN_LIBVIRT_LIVESNAPSHOT_VERSION = (1, 0, 0)
+MIN_QEMU_LIVESNAPSHOT_VERSION = (1, 3, 0)
 
 
 def _get_eph_disk(ephemeral):
@@ -319,16 +324,29 @@ class LibvirtDriver(driver.ComputeDriver):
             self._host_state = HostState(self.read_only)
         return self._host_state
 
-    def has_min_version(self, ver):
-        libvirt_version = self._conn.getLibVersion()
-
+    def has_min_version(self, lv_ver=None, hv_ver=None, hv_type=None):
         def _munge_version(ver):
             return ver[0] * 1000000 + ver[1] * 1000 + ver[2]
 
-        if libvirt_version < _munge_version(ver):
-            return False
+        try:
+            if lv_ver is not None:
+                libvirt_version = self._conn.getLibVersion()
+                if libvirt_version < _munge_version(lv_ver):
+                    return False
 
-        return True
+            if hv_ver is not None:
+                hypervisor_version = self._conn.getVersion()
+                if hypervisor_version < _munge_version(hv_ver):
+                    return False
+
+            if hv_type is not None:
+                hypervisor_type = self._conn.getType()
+                if hypervisor_type != hv_type:
+                    return False
+
+            return True
+        except Exception:
+            return False
 
     def init_host(self, host):
         if not self.has_min_version(MIN_LIBVIRT_VERSION):
@@ -862,8 +880,8 @@ class LibvirtDriver(driver.ComputeDriver):
             live_snapshot = False
 
         # NOTE(dkang): managedSave does not work for LXC
-        if FLAGS.libvirt_type != 'lxc':
-            if state == power_state.RUNNING:
+        if FLAGS.libvirt_type != 'lxc' and not live_snapshot:
+            if state == power_state.RUNNING or state == power_state.PAUSED:
                 virt_dom.managedSave(0)
 
         snapshot_backend = self.image_backend.snapshot(disk_path,
@@ -897,9 +915,14 @@ class LibvirtDriver(driver.ComputeDriver):
                     snapshot_backend.snapshot_delete()
                 # NOTE(dkang): because previous managedSave is not called
                 #              for LXC, _create_domain must not be called.
-                if FLAGS.libvirt_type != 'lxc':
+                if FLAGS.libvirt_type != 'lxc' and not live_snapshot:
                     if state == power_state.RUNNING:
                         self._create_domain(domain=virt_dom)
+                    elif state == power_state.PAUSED:
+                        self._create_domain(domain=virt_dom,
+                                launch_flags=libvirt.VIR_DOMAIN_START_PAUSED)
+                LOG.info(_("Snapshot extracted, beginning image upload"),
+                         instance=instance)
 
             # Upload that image to the image service
             with libvirt_utils.file_open(out_path) as image_file:
@@ -907,6 +930,72 @@ class LibvirtDriver(driver.ComputeDriver):
                                      image_href,
                                      metadata,
                                      image_file)
+                LOG.info(_("Snapshot image upload complete"),
+                         instance=instance)
+
+    def _live_snapshot(self, domain, disk_path, out_path, image_format):
+        """Snapshot an instance without downtime."""
+        # Save a copy of the domain's running XML file
+        xml = domain.XMLDesc(0)
+
+        # Abort is an idempotent operation, so make sure any block
+        # jobs which may have failed are ended.
+        try:
+            domain.blockJobAbort(disk_path, 0)
+        except Exception:
+            pass
+
+        def _wait_for_block_job(domain, disk_path):
+            status = domain.blockJobInfo(disk_path, 0)
+            try:
+                cur = status.get('cur', 0)
+                end = status.get('end', 0)
+            except Exception:
+                return False
+
+            if cur == end and cur != 0 and end != 0:
+                return False
+            else:
+                return True
+
+        # NOTE (rmk): We are using shallow rebases as a workaround to a bug
+        #             in QEMU 1.3. In order to do this, we need to create
+        #             a destination image with the original backing file
+        #             and matching size of the instance root disk.
+        src_disk_size = libvirt_utils.get_disk_size(disk_path)
+        src_back_path = libvirt_utils.get_disk_backing_file(disk_path,
+                                                            basename=False)
+        disk_delta = out_path + '.delta'
+        libvirt_utils.create_cow_image(src_back_path, disk_delta,
+                                       src_disk_size)
+
+        try:
+            # NOTE (rmk): blockRebase cannot be executed on persistent
+            #             domains, so we need to temporarily undefine it.
+            #             If any part of this block fails, the domain is
+            #             re-defined regardless.
+            if domain.isPersistent():
+                domain.undefine()
+
+            # NOTE (rmk): Establish a temporary mirror of our root disk and
+            #             issue an abort once we have a complete copy.
+            domain.blockRebase(disk_path, disk_delta, 0,
+                               libvirt.VIR_DOMAIN_BLOCK_REBASE_COPY |
+                               libvirt.VIR_DOMAIN_BLOCK_REBASE_REUSE_EXT |
+                               libvirt.VIR_DOMAIN_BLOCK_REBASE_SHALLOW)
+
+            while _wait_for_block_job(domain, disk_path):
+                time.sleep(0.5)
+
+            domain.blockJobAbort(disk_path, 0)
+            libvirt_utils.chown(disk_delta, os.getuid())
+        finally:
+            self._conn.defineXML(xml)
+
+        # Convert the delta (CoW) image with a backing file to a flat
+        # image with no backing file.
+        libvirt_utils.extract_snapshot(disk_delta, 'qcow2', None,
+                                       out_path, image_format)
 
     @exception.wrap_exception()
     def reboot(self, instance, network_info, reboot_type='SOFT',
