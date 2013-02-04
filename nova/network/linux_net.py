@@ -41,6 +41,9 @@ linux_net_opts = [
     cfg.StrOpt('dhcpbridge_flagfile',
                default='/etc/nova/nova-dhcpbridge.conf',
                help='location of flagfile for dhcpbridge'),
+    cfg.StrOpt('fixed_gateway',
+               default=None,
+               help='Gateway for the fixed IPs'),
     cfg.StrOpt('networks_path',
                default='$state_path/networks',
                help='Location to keep network config files'),
@@ -80,6 +83,10 @@ linux_net_opts = [
     cfg.IntOpt('send_arp_for_ha_count',
                default=3,
                help='send this many gratuitous ARPs for HA setup'),
+    cfg.BoolOpt('use_routing_tables',
+                default=False,
+                help='Install routing tables when binding ips to an '
+                     'interface.'),
     cfg.BoolOpt('use_single_default_gateway',
                 default=False,
                 help='Use single default gateway. Only first nic of vm will '
@@ -526,13 +533,7 @@ def metadata_forward():
 
 def metadata_accept():
     """Create the filter accept rule for metadata."""
-    iptables_manager.ipv4['filter'].add_rule('INPUT',
-                                             '-s 0.0.0.0/0 -d %s '
-                                             '-p tcp -m tcp --dport %s '
-                                             '-j ACCEPT' %
-                                             (FLAGS.metadata_host,
-                                              FLAGS.metadata_port))
-    iptables_manager.apply()
+    pass
 
 
 def add_snat_rule(ip_range):
@@ -547,28 +548,7 @@ def add_snat_rule(ip_range):
 
 def init_host(ip_range=None):
     """Basic networking setup goes here."""
-    # NOTE(devcamcar): Cloud public SNAT entries and the default
-    # SNAT rule for outbound traffic.
-    if not ip_range:
-        ip_range = FLAGS.fixed_range
-
-    add_snat_rule(ip_range)
-
-    iptables_manager.ipv4['nat'].add_rule('POSTROUTING',
-                                          '-s %s -d %s/32 -j ACCEPT' %
-                                          (ip_range, FLAGS.metadata_host))
-
-    for dmz in FLAGS.dmz_cidr:
-        iptables_manager.ipv4['nat'].add_rule('POSTROUTING',
-                                              '-s %s -d %s -j ACCEPT' %
-                                              (ip_range, dmz))
-
-    iptables_manager.ipv4['nat'].add_rule('POSTROUTING',
-                                          '-s %(range)s -d %(range)s '
-                                          '-m conntrack ! --ctstate DNAT '
-                                          '-j ACCEPT' %
-                                          {'range': ip_range})
-    iptables_manager.apply()
+    pass
 
 
 def send_arp_for_ip(ip, device, count):
@@ -599,11 +579,7 @@ def unbind_floating_ip(floating_ip, device):
 
 
 def ensure_metadata_ip():
-    """Sets up local metadata ip."""
-    _execute('ip', 'addr', 'add', '169.254.169.254/32',
-             'scope', 'link', 'dev', 'lo',
-             run_as_root=True, check_exit_code=[0, 2, 254])
-
+    pass
 
 def ensure_vpn_forward(public_ip, port, private_ip):
     """Sets up forwarding rules for vlan."""
@@ -638,8 +614,8 @@ def remove_floating_forward(floating_ip, fixed_ip, device):
 
 def floating_forward_rules(floating_ip, fixed_ip, device):
     rule = '-s %s -j SNAT --to %s' % (fixed_ip, floating_ip)
-    if device:
-        rule += ' -o %s' % device
+    if FLAGS.flat_network_bridge:
+        rule += ' -o %s' % FLAGS.flat_network_bridge
     return [('PREROUTING', '-d %s -j DNAT --to %s' % (floating_ip, fixed_ip)),
             ('OUTPUT', '-d %s -j DNAT --to %s' % (floating_ip, fixed_ip)),
             ('float-snat', rule)]
@@ -648,8 +624,6 @@ def floating_forward_rules(floating_ip, fixed_ip, device):
 def initialize_gateway_device(dev, network_ref):
     if not network_ref:
         return
-
-    _execute('sysctl', '-w', 'net.ipv4.ip_forward=1', run_as_root=True)
 
     # NOTE(vish): The ip for dnsmasq has to be the first address on the
     #             bridge for it to respond to reqests properly
@@ -696,6 +670,18 @@ def initialize_gateway_device(dev, network_ref):
                  'change', network_ref['cidr_v6'],
                  'dev', dev, run_as_root=True)
 
+    if FLAGS.use_routing_tables:
+        net = netaddr.IPNetwork(str(network_ref['cidr']))
+        gateway = FLAGS.fixed_gateway
+        if gateway is None:
+            gateway = net[1]
+
+        _execute('ip', 'route', 'replace', str(net), 'dev', dev, 'table', dev,
+                 run_as_root=True)
+
+        _execute('ip', 'route', 'replace', '0.0.0.0/0', 'via', gateway, 'dev',
+                 dev, 'table', dev, run_as_root=True)
+ 
 
 def get_dhcp_leases(context, network_ref):
     """Return a network's hosts config in dnsmasq leasefile format."""
