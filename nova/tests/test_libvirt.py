@@ -485,7 +485,7 @@ class LibvirtConnTestCase(test.TestCase):
         self.flags(libvirt_snapshots_directory='')
         self.call_libvirt_dependant_setup = False
         libvirt_driver.libvirt_utils = fake_libvirt_utils
-        snapshots.libvirt_utils = fake_libvirt_utils
+        imagebackend.libvirt_utils = fake_libvirt_utils
 
         def fake_extend(image, size):
             pass

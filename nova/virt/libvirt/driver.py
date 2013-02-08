@@ -844,26 +844,57 @@ class LibvirtDriver(driver.ComputeDriver):
         (state, _max_mem, _mem, _cpus, _t) = virt_dom.info()
         state = LIBVIRT_POWER_STATE[state]
 
+        # NOTE(rmk): Live snapshots require QEMU 1.3 and Libvirt 1.0.0.
+        #            These restrictions can be relaxed as other configurations
+        #            can be validated.
+        if self.has_min_version(MIN_LIBVIRT_LIVESNAPSHOT_VERSION,
+                                MIN_QEMU_LIVESNAPSHOT_VERSION,
+                                REQ_HYPERVISOR_LIVESNAPSHOT) \
+                and not source_format == "lvm":
+            live_snapshot = True
+        else:
+            live_snapshot = False
+
+        # NOTE(rmk): We cannot perform live snapshots when a managedSave
+        #            file is present, so we will use the cold/legacy method
+        #            for instances which are shutdown.
+        if state == power_state.SHUTDOWN:
+            live_snapshot = False
+
         # NOTE(dkang): managedSave does not work for LXC
         if FLAGS.libvirt_type != 'lxc':
             if state == power_state.RUNNING:
                 virt_dom.managedSave(0)
 
-        # Make the snapshot
-        snapshot = self.image_backend.snapshot(disk_path, snapshot_name,
-                                               image_type=source_format)
+        snapshot_backend = self.image_backend.snapshot(disk_path,
+                snapshot_name,
+                image_type=source_format)
 
-        snapshot.create()
+        if live_snapshot:
+            LOG.info(_("Beginning live snapshot process"),
+                     instance=instance)
+        else:
+            LOG.info(_("Beginning cold snapshot process"),
+                     instance=instance)
+            snapshot_backend.snapshot_create()
 
-        # Export the snapshot to a raw image
-        snapshot_directory = FLAGS.libvirt_snapshots_directory
-        utils.ensure_tree(snapshot_directory)
+        update_task_state(task_state=task_states.IMAGE_PENDING_UPLOAD)
+        snapshot_directory = CONF.libvirt_snapshots_directory
+        fileutils.ensure_tree(snapshot_directory)
         with utils.tempdir(dir=snapshot_directory) as tmpdir:
             try:
                 out_path = os.path.join(tmpdir, snapshot_name)
-                snapshot.extract(out_path, image_format)
+                if live_snapshot:
+                    # NOTE (rmk): libvirt needs to be able to write to the
+                    #             temp directory, which is owned nova.
+                    utils.execute('chmod', '777', tmpdir, run_as_root=True)
+                    self._live_snapshot(virt_dom, disk_path, out_path,
+                                        image_format)
+                else:
+                    snapshot_backend.snapshot_extract(out_path, image_format)
             finally:
-                snapshot.delete()
+                if not live_snapshot:
+                    snapshot_backend.snapshot_delete()
                 # NOTE(dkang): because previous managedSave is not called
                 #              for LXC, _create_domain must not be called.
                 if FLAGS.libvirt_type != 'lxc':
