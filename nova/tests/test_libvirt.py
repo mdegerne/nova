@@ -1216,7 +1216,7 @@ class LibvirtConnTestCase(test.TestCase):
         def convert_image(source, dest, out_format):
             libvirt_driver.libvirt_utils.files[dest] = ''
 
-        images.convert_image = convert_image
+        self.stubs.Set(images, 'convert_image', convert_image)
 
         self.mox.ReplayAll()
 
@@ -1296,7 +1296,7 @@ class LibvirtConnTestCase(test.TestCase):
         def convert_image(source, dest, out_format):
             libvirt_driver.libvirt_utils.files[dest] = ''
 
-        images.convert_image = convert_image
+        self.stubs.Set(images, 'convert_image', convert_image)
 
         self.mox.ReplayAll()
 
@@ -3880,8 +3880,6 @@ disk size: 4.4M''', ''))
 
         def fake_qemu_img_info(path):
             class FakeImgInfo(object):
-                def get(self, attr):
-                    return getattr(self, attr.replace(' ', '_'), None)
                 pass
 
             file_format = path.split('.')[-1]
