@@ -246,7 +246,7 @@ class Lvm(Image):
                 raise RuntimeError(_('You should specify'
                                      ' libvirt_images_volume_group'
                                      ' flag to use LVM images.'))
-            self.vg = CONF.libvirt_images_volume_group
+            self.vg = FLAGS.libvirt_images_volume_group
             self.lv = '%s_%s' % (self.escape(instance['name']),
                                  self.escape(disk_name))
             self.path = os.path.join('/dev', self.vg, self.lv)
@@ -292,7 +292,7 @@ class Lvm(Image):
                 libvirt_utils.remove_logical_volumes(path)
 
     def snapshot_create(self):
-        size = CONF.libvirt_lvm_snapshot_size
+        size = FLAGS.libvirt_lvm_snapshot_size
         cmd = ('lvcreate', '-L', size, '-s', '--name', self.snapshot_name,
                self.path)
         libvirt_utils.execute(*cmd, run_as_root=True, attempts=3)
