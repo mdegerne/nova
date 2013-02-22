@@ -97,7 +97,7 @@ class Image(object):
         :device_type: Device type for this image.
         :cache_mode: Caching mode for this image
         """
-        info = config.LibvirtConfigGuestDisk()
+        info = vconfig.LibvirtConfigGuestDisk()
         info.source_type = self.source_type
         info.source_device = device_type
         info.target_bus = disk_bus
