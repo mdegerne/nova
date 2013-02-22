@@ -896,7 +896,6 @@ class LibvirtDriver(driver.ComputeDriver):
                      instance=instance)
             snapshot_backend.snapshot_create()
 
-        update_task_state(task_state=task_states.IMAGE_PENDING_UPLOAD)
         snapshot_directory = FLAGS.libvirt_snapshots_directory
         fileutils.ensure_tree(snapshot_directory)
         with utils.tempdir(dir=snapshot_directory) as tmpdir:
