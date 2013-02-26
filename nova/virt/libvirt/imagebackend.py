@@ -150,9 +150,8 @@ class Raw(Image):
                  snapshot_name=None):
         super(Raw, self).__init__("file", "raw", is_block_dev=False)
 
-        self.path = (path or
-                     os.path.join(libvirt_utils.get_instance_path(instance),
-                                  disk_name))
+        self.path = path or os.path.join(FLAGS.instances_path,
+                                         instance, disk_name)
         self.snapshot_name = snapshot_name
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
@@ -186,9 +185,8 @@ class Qcow2(Image):
                  snapshot_name=None):
         super(Qcow2, self).__init__("file", "qcow2", is_block_dev=False)
 
-        self.path = (path or
-                     os.path.join(libvirt_utils.get_instance_path(instance),
-                                  disk_name))
+        self.path = path or os.path.join(FLAGS.instances_path,
+                                         instance, disk_name)
         self.snapshot_name = snapshot_name
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
