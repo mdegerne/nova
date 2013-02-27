@@ -269,8 +269,8 @@ class LvmTestCase(_ImageTestCase):
                                             sparse=sparse)
         self.disk.get_disk_size(self.TEMPLATE_PATH
                                          ).AndReturn(self.TEMPLATE_SIZE)
-        cmd = ('dd', 'if=%s' % self.TEMPLATE_PATH,
-               'of=%s' % self.PATH, 'bs=4M')
+        cmd = ('qemu-img', 'convert', '-O', 'raw', self.TEMPLATE_PATH,
+               self.PATH)
         self.utils.execute(*cmd, run_as_root=True)
         self.mox.ReplayAll()
 
@@ -299,8 +299,8 @@ class LvmTestCase(_ImageTestCase):
                                             self.SIZE, sparse=sparse)
         self.disk.get_disk_size(self.TEMPLATE_PATH
                                          ).AndReturn(self.TEMPLATE_SIZE)
-        cmd = ('dd', 'if=%s' % self.TEMPLATE_PATH,
-               'of=%s' % self.PATH, 'bs=4M')
+        cmd = ('qemu-img', 'convert', '-O', 'raw', self.TEMPLATE_PATH,
+               self.PATH)
         self.utils.execute(*cmd, run_as_root=True)
         self.disk.resize2fs(self.PATH)
         self.mox.ReplayAll()

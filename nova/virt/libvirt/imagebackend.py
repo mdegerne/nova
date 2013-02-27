@@ -26,7 +26,8 @@ from nova.openstack.common import excutils
 from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt.disk import api as disk
-from nova.virt.libvirt import config
+from nova.virt import images
+from nova.virt.libvirt import config as vconfig
 from nova.virt.libvirt import utils as libvirt_utils
 
 
@@ -44,6 +45,10 @@ __imagebackend_opts = [
             default=False,
             help='Create sparse logical volumes (with virtualsize)'
                  ' if this flag is set to True.'),
+    cfg.IntOpt('libvirt_lvm_snapshot_size',
+               default='1000',
+               help='The amount of storage (in megabytes) to allocate for LVM'
+                    ' snapshot copy-on-write blocks.'),
         ]
 
 FLAGS = flags.FLAGS
@@ -92,7 +97,7 @@ class Image(object):
         :device_type: Device type for this image.
         :cache_mode: Caching mode for this image
         """
-        info = config.LibvirtConfigGuestDisk()
+        info = vconfig.LibvirtConfigGuestDisk()
         info.source_type = self.source_type
         info.source_device = device_type
         info.target_bus = disk_bus
@@ -130,13 +135,24 @@ class Image(object):
             self.create_image(call_if_not_exists, base, size,
                               *args, **kwargs)
 
+    def snapshot_create(self):
+        raise NotImplementedError
+
+    def snapshot_extract(self, target, out_format):
+        raise NotImplementedError
+
+    def snapshot_delete(self):
+        raise NotImplementedError
+
 
 class Raw(Image):
-    def __init__(self, instance, name):
+    def __init__(self, instance=None, disk_name=None, path=None,
+                 snapshot_name=None):
         super(Raw, self).__init__("file", "raw", is_block_dev=False)
 
-        self.path = os.path.join(FLAGS.instances_path,
-                                 instance, name)
+        self.path = path or os.path.join(FLAGS.instances_path,
+                                         instance, disk_name)
+        self.snapshot_name = snapshot_name
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
         @utils.synchronized(base, external=True, lock_path=self.lock_path)
@@ -154,13 +170,24 @@ class Raw(Image):
             with utils.remove_path_on_error(self.path):
                 copy_raw_image(base, self.path, size)
 
+    def snapshot_create(self):
+        pass
+
+    def snapshot_extract(self, target, out_format):
+        images.convert_image(self.path, target, out_format)
+
+    def snapshot_delete(self):
+        pass
+
 
 class Qcow2(Image):
-    def __init__(self, instance, name):
+    def __init__(self, instance=None, disk_name=None, path=None,
+                 snapshot_name=None):
         super(Qcow2, self).__init__("file", "qcow2", is_block_dev=False)
 
-        self.path = os.path.join(FLAGS.instances_path,
-                                 instance, name)
+        self.path = path or os.path.join(FLAGS.instances_path,
+                                         instance, disk_name)
+        self.snapshot_name = snapshot_name
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
         @utils.synchronized(base, external=True, lock_path=self.lock_path)
@@ -186,24 +213,48 @@ class Qcow2(Image):
         with utils.remove_path_on_error(self.path):
             copy_qcow2_image(base, self.path, size)
 
+    def snapshot_create(self):
+        libvirt_utils.create_snapshot(self.path, self.snapshot_name)
+
+    def snapshot_extract(self, target, out_format):
+        libvirt_utils.extract_snapshot(self.path, 'qcow2',
+                                       self.snapshot_name, target,
+                                       out_format)
+
+    def snapshot_delete(self):
+        libvirt_utils.delete_snapshot(self.path, self.snapshot_name)
+
 
 class Lvm(Image):
     @staticmethod
     def escape(filename):
         return filename.replace('_', '__')
 
-    def __init__(self, instance, name):
+    def __init__(self, instance=None, disk_name=None, path=None,
+                 snapshot_name=None):
         super(Lvm, self).__init__("block", "raw", is_block_dev=True)
 
-        if not FLAGS.libvirt_images_volume_group:
-            raise RuntimeError(_('You should specify'
-                               ' libvirt_images_volume_group'
-                               ' flag to use LVM images.'))
-        self.vg = FLAGS.libvirt_images_volume_group
-        self.lv = '%s_%s' % (self.escape(instance),
-                             self.escape(name))
-        self.path = os.path.join('/dev', self.vg, self.lv)
+        if path:
+            info = libvirt_utils.logical_volume_info(path)
+            self.vg = info['VG']
+            self.lv = info['LV']
+            self.path = path
+        else:
+            if not FLAGS.libvirt_images_volume_group:
+                raise RuntimeError(_('You should specify'
+                                     ' libvirt_images_volume_group'
+                                     ' flag to use LVM images.'))
+            self.vg = FLAGS.libvirt_images_volume_group
+            self.lv = '%s_%s' % (self.escape(instance),
+                                 self.escape(disk_name))
+            self.path = os.path.join('/dev', self.vg, self.lv)
+
         self.sparse = FLAGS.libvirt_sparse_logical_volumes
+
+        if snapshot_name:
+            self.snapshot_name = snapshot_name
+            self.snapshot_path = os.path.join('/dev', self.vg,
+                                              self.snapshot_name)
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
         @utils.synchronized(base, external=True, lock_path=self.lock_path)
@@ -213,8 +264,7 @@ class Lvm(Image):
             size = size if resize else base_size
             libvirt_utils.create_lvm_image(self.vg, self.lv,
                                            size, sparse=self.sparse)
-            cmd = ('dd', 'if=%s' % base, 'of=%s' % self.path, 'bs=4M')
-            utils.execute(*cmd, run_as_root=True)
+            images.convert_image(base, self.path, 'raw', run_as_root=True)
             if resize:
                 disk.resize2fs(self.path)
 
@@ -239,6 +289,21 @@ class Lvm(Image):
             with excutils.save_and_reraise_exception():
                 libvirt_utils.remove_logical_volumes(path)
 
+    def snapshot_create(self):
+        size = FLAGS.libvirt_lvm_snapshot_size
+        cmd = ('lvcreate', '-L', size, '-s', '--name', self.snapshot_name,
+               self.path)
+        libvirt_utils.execute(*cmd, run_as_root=True, attempts=3)
+
+    def snapshot_extract(self, target, out_format):
+        images.convert_image(self.snapshot_path, target, out_format,
+                             run_as_root=True)
+
+    def snapshot_delete(self):
+        # NOTE (rmk): Snapshot volumes are automatically zeroed by LVM
+        cmd = ('lvremove', '-f', self.snapshot_path)
+        libvirt_utils.execute(*cmd, run_as_root=True, attempts=3)
+
 
 class Backend(object):
     def __init__(self, use_cow):
@@ -249,7 +314,15 @@ class Backend(object):
             'default': Qcow2 if use_cow else Raw
         }
 
-    def image(self, instance, name, image_type=None):
+    def backend(self, image_type=None):
+        if not image_type:
+            image_type = FLAGS.libvirt_images_type
+        image = self.BACKEND.get(image_type)
+        if not image:
+            raise RuntimeError(_('Unknown image_type=%s') % image_type)
+        return image
+
+    def image(self, instance, disk_name, image_type=None):
         """Constructs image for selected backend
 
         :instance: Instance name.
@@ -257,9 +330,15 @@ class Backend(object):
         :image_type: Image type.
         Optional, is FLAGS.libvirt_images_type by default.
         """
-        if not image_type:
-            image_type = FLAGS.libvirt_images_type
-        image = self.BACKEND.get(image_type)
-        if not image:
-            raise RuntimeError(_('Unknown image_type=%s') % image_type)
-        return image(instance, name)
+        backend = self.backend(image_type)
+        return backend(instance=instance, disk_name=disk_name)
+
+    def snapshot(self, disk_path, snapshot_name, image_type=None):
+        """Returns snapshot for given image
+
+        :path: path to image
+        :snapshot_name: snapshot name
+        :image_type: type of image
+        """
+        backend = self.backend(image_type)
+        return backend(path=disk_path, snapshot_name=snapshot_name)
