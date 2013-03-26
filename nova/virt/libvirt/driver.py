@@ -209,6 +209,9 @@ libvirt_opts = [
                  default=[],
                  help='Specific cachemodes to use for different disk types '
                       'e.g: ["file=directsync","block=none"]'),
+    cfg.StrOpt('libvirt_instance_log_path',
+                default='/var/log/libvirt/qemu',
+                help='Location of libvirt KVM/QEMU instance logs'),
     ]
 
 CONF = cfg.CONF
@@ -864,6 +867,12 @@ class LibvirtDriver(driver.ComputeDriver):
 
             #NOTE(bfilippov): destroy all LVM disks for this instance
             self._cleanup_lvm(instance)
+
+        if CONF.libvirt_type in ("kvm", "qemu"):
+            instance_log = "%s/%s.log" % (CONF.libvirt_instance_log_path,
+                                          instance["name"])
+            if os.path.exists(instance_log):
+                utils.execute("rm", "-f", instance_log, run_as_root=True)
 
     def _cleanup_lvm(self, instance):
         """Delete all LVM disks for given instance object."""
