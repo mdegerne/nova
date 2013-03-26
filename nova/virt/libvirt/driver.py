@@ -191,6 +191,9 @@ libvirt_opts = [
                default='$instances_path/snapshots',
                help='Location where libvirt driver will store snapshots '
                     'before uploading them to image service'),
+    cfg.StrOpt('libvirt_instance_log_path',
+                default='/var/log/libvirt/qemu',
+                help='Location of libvirt KVM/QEMU instance logs'),
     ]
 
 FLAGS = flags.FLAGS
@@ -593,6 +596,12 @@ class LibvirtDriver(driver.ComputeDriver):
 
         #NOTE(bfilippov): destroy all LVM disks for this instance
         self._cleanup_lvm(instance)
+
+        if FLAGS.libvirt_type in ("kvm", "qemu"):
+            instance_log = "%s/%s.log" % (FLAGS.libvirt_instance_log_path,
+                                          instance["name"])
+            if os.path.exists(instance_log):
+                utils.execute("rm", "-f", instance_log, run_as_root=True)
 
     def _cleanup_lvm(self, instance):
         """Delete all LVM disks for given instance object"""
