@@ -444,6 +444,7 @@ class Connection(object):
         self.memory_transport = self.conf.fake_rabbit
 
         self.connection = None
+        self.connection_errors = []
         self.reconnect()
 
     def _fetch_ssl_params(self):
