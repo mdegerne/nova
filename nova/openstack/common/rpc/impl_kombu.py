@@ -400,6 +400,7 @@ class Connection(object):
             self.params['ssl'] = self._fetch_ssl_params()
 
         self.connection = None
+        self.connection_errors = []
         self.reconnect()
 
     def _fetch_ssl_params(self):
