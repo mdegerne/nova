@@ -46,6 +46,9 @@ linux_net_opts = [
     cfg.MultiStrOpt('dhcpbridge_flagfile',
                     default=['/etc/nova/nova-dhcpbridge.conf'],
                     help='location of flagfiles for dhcpbridge'),
+    cfg.StrOpt('fixed_gateway',
+               default=None,
+               help='Gateway for the fixed IPs'),
     cfg.StrOpt('networks_path',
                default=paths.state_path_def('networks'),
                help='Location to keep network config files'),
@@ -95,6 +98,10 @@ linux_net_opts = [
     cfg.IntOpt('send_arp_for_ha_count',
                default=3,
                help='send this many gratuitous ARPs for HA setup'),
+    cfg.BoolOpt('use_routing_tables',
+                default=False,
+                help='Install routing tables when binding ips to an '
+                     'interface.'),
     cfg.BoolOpt('use_single_default_gateway',
                 default=False,
                 help='Use single default gateway. Only first nic of vm will '
@@ -612,14 +619,7 @@ def metadata_forward():
 
 
 def metadata_accept():
-    """Create the filter accept rule for metadata."""
-    iptables_manager.ipv4['filter'].add_rule('INPUT',
-                                             '-s 0.0.0.0/0 -d %s '
-                                             '-p tcp -m tcp --dport %s '
-                                             '-j ACCEPT' %
-                                             (CONF.metadata_host,
-                                              CONF.metadata_port))
-    iptables_manager.apply()
+    pass
 
 
 def add_snat_rule(ip_range):
@@ -696,9 +696,7 @@ def unbind_floating_ip(floating_ip, device):
 
 def ensure_metadata_ip():
     """Sets up local metadata ip."""
-    _execute('ip', 'addr', 'add', '169.254.169.254/32',
-             'scope', 'link', 'dev', 'lo',
-             run_as_root=True, check_exit_code=[0, 2, 254])
+    pass
 
 
 def ensure_vpn_forward(public_ip, port, private_ip):
@@ -817,6 +815,18 @@ def initialize_gateway_device(dev, network_ref):
         _execute('ip', '-f', 'inet6', 'addr',
                  'change', network_ref['cidr_v6'],
                  'dev', dev, run_as_root=True)
+
+    if CONF.use_routing_tables:
+        net = netaddr.IPNetwork(str(network_ref['cidr']))
+        gateway = CONF.fixed_gateway
+        if gateway is None:
+            gateway = net[1]
+
+        _execute('ip', 'route', 'replace', str(net), 'dev', dev, 'table', dev,
+                 run_as_root=True)
+
+        _execute('ip', 'route', 'replace', '0.0.0.0/0', 'via', gateway, 'dev',
+                 dev, 'table', dev, run_as_root=True)
 
 
 def get_dhcp_leases(context, network_ref):
