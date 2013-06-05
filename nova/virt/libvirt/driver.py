@@ -740,7 +740,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 state = dom_info['state']
                 new_domid = dom_info['id']
             except exception.NotFound:
-                LOG.error(_("During wait destroy, instance disappeared."),
+                LOG.warn(_("During wait destroy, instance disappeared."),
                           instance=instance)
                 raise utils.LoopingCallDone()
 
