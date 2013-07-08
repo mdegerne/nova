@@ -49,6 +49,9 @@ linux_net_opts = [
     cfg.StrOpt('fixed_gateway',
                default=None,
                help='Gateway for the fixed IPs'),
+    cfg.StrOpt('fixed_net_vlan',
+               default='',
+               help='Fixed network vlan tag'),
     cfg.StrOpt('networks_path',
                default=paths.state_path_def('networks'),
                help='Location to keep network config files'),
@@ -125,15 +128,21 @@ linux_net_opts = [
                default='',
                help='Regular expression to match iptables rule that should'
                     'always be on the bottom.'),
-    cfg.StrOpt('vlan_route_connmark',
-               default='0x48617473',
-               help='Connmark hexadecimal value for vlan routing'),
+    cfg.StrOpt('services_net_vlan',
+               default='',
+               help='Services network vlan tag'),
+    cfg.StrOpt('services_net',
+               default='',
+               help='Services network'),
     cfg.StrOpt('floating_gateway',
                default='',
                help='Gateway IP for floating network'),
     cfg.StrOpt('floating_range',
                default='',
                help='CIDR network for floating ips'),
+    cfg.StrOpt('floating_net_vlan',
+               default='',
+               help='Floating network vlan tag'),
     ]
 
 CONF = cfg.CONF
@@ -673,6 +682,19 @@ def init_host(ip_range=None):
                                           '-m conntrack ! --ctstate DNAT '
                                           '-j ACCEPT' %
                                           {'range': ip_range})
+
+    connmark_rules = [('PREROUTING', '-j CONNMARK --restore-mark')]
+    for net, net_vlan in [[CONF.fixed_range, CONF.fixed_net_vlan],
+                          [CONF.floating_range, CONF.floating_net_vlan],
+                          [CONF.services_net, CONF.services_net_vlan]]:
+        if net and net_vlan:
+            connmark_rules.append(('PREROUTING',
+                                   '-m mark --mark 0 -d %s -j MARK --set-mark %s' %
+                                   (net, net_vlan)))
+    connmark_rules.append(('PREROUTING', '-j CONNMARK --save-mark'))
+    for chain, rule in connmark_rules:
+        iptables_manager.ipv4['mangle'].add_rule(chain, rule)
+
     iptables_manager.apply()
 
 
@@ -688,9 +710,13 @@ def send_arp_for_ip(ip, device, count):
 
 def bind_floating_ip(floating_ip, device):
     """Bind ip to public interface."""
-    _execute('ip', 'addr', 'add', str(floating_ip) + '/32',
-             'dev', device,
-             run_as_root=True, check_exit_code=[0, 2, 254])
+    if CONF.floating_range:
+        floating_mask = CONF.floating_range.split('/')[1]
+    else:
+        floating_mask = '32'
+
+    _execute('ip', 'addr', 'add', str(floating_ip) + '/' + floating_mask,
+             'dev', device, run_as_root=True, check_exit_code=[0, 2, 254])
 
     if CONF.send_arp_for_ha and CONF.send_arp_for_ha_count > 0:
         send_arp_for_ip(floating_ip, device, CONF.send_arp_for_ha_count)
@@ -698,9 +724,13 @@ def bind_floating_ip(floating_ip, device):
 
 def unbind_floating_ip(floating_ip, device):
     """Unbind a public ip from public interface."""
-    _execute('ip', 'addr', 'del', str(floating_ip) + '/32',
-             'dev', device,
-             run_as_root=True, check_exit_code=[0, 2, 254])
+    if CONF.floating_range:
+        floating_mask = CONF.floating_range.split('/')[1]
+    else:
+        floating_mask = '32'
+
+    _execute('ip', 'addr', 'del', str(floating_ip) + '/' + floating_mask,
+             'dev', device, run_as_root=True, check_exit_code=[0, 2, 254])
 
 
 def ensure_metadata_ip():
@@ -748,8 +778,6 @@ def ensure_floating_forward(floating_ip, fixed_ip, device, network):
         LOG.warn(msg % {'num': num_rules, 'float': floating_ip})
     for chain, rule in floating_forward_rules(floating_ip, fixed_ip, device):
         iptables_manager.ipv4['nat'].add_rule(chain, rule)
-    for chain, rule in floating_forward_mangle_rules(floating_ip, fixed_ip, device):
-        iptables_manager.ipv4['mangle'].add_rule(chain, rule)
     iptables_manager.apply()
     if device != network['bridge']:
         ensure_ebtables_rules(*floating_ebtables_rules(fixed_ip, network))
@@ -759,8 +787,6 @@ def remove_floating_forward(floating_ip, fixed_ip, device, network):
     """Remove forwarding for floating ip."""
     for chain, rule in floating_forward_rules(floating_ip, fixed_ip, device):
         iptables_manager.ipv4['nat'].remove_rule(chain, rule)
-    for chain, rule in floating_forward_mangle_rules(floating_ip, fixed_ip, device):
-        iptables_manager.ipv4['mangle'].remove_rule(chain, rule)
     iptables_manager.apply()
     if device != network['bridge']:
         remove_ebtables_rules(*floating_ebtables_rules(fixed_ip, network))
@@ -789,13 +815,6 @@ def floating_forward_rules(floating_ip, fixed_ip, device):
                   '--to-source %s' %
                   (fixed_ip, floating_ip)))
     return rules
-
-
-def floating_forward_mangle_rules(floating_ip, fixed_ip, device):
-    return [('PREROUTING', '-j CONNMARK --restore-mark'),
-            ('PREROUTING', '-d %s -j MARK --set-mark %s' % 
-                (floating_ip, CONF.vlan_route_connmark)),
-            ('PREROUTING', '-j CONNMARK --save-mark')]
 
 
 def initialize_gateway_device(dev, network_ref):
