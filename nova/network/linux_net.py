@@ -404,6 +404,8 @@ class IptablesManager(object):
         self.ipv4['nat'].add_chain('float-snat')
         self.ipv4['nat'].add_rule('snat', '-j $float-snat')
 
+        self.ipv4['mangle'].add_chain('nova-network-FLOATMARK', wrap=False)
+
     def defer_apply_on(self):
         self.iptables_apply_deferred = True
 
@@ -683,7 +685,8 @@ def init_host(ip_range=None):
                                           '-j ACCEPT' %
                                           {'range': ip_range})
 
-    connmark_rules = [('PREROUTING', '-j CONNMARK --restore-mark')]
+    connmark_rules = [('PREROUTING', '-j CONNMARK --restore-mark'), 
+                      ('PREROUTING', '-j nova-network-FLOATMARK')]
     for net, net_vlan in [[CONF.fixed_range, CONF.fixed_net_vlan],
                           [CONF.floating_range, CONF.floating_net_vlan],
                           [CONF.services_net, CONF.services_net_vlan]]:
@@ -778,6 +781,8 @@ def ensure_floating_forward(floating_ip, fixed_ip, device, network):
         LOG.warn(msg % {'num': num_rules, 'float': floating_ip})
     for chain, rule in floating_forward_rules(floating_ip, fixed_ip, device):
         iptables_manager.ipv4['nat'].add_rule(chain, rule)
+    iptables_manager.ipv4['mangle'].add_rule('nova-network-FLOATMARK', '-s %s -d %s -m mark --mark 0 -j MARK --set-mark %s' %
+                                             (CONF.fixed_range, floating_ip, CONF.fixed_net_vlan), wrap=False)
     iptables_manager.apply()
     if device != network['bridge']:
         ensure_ebtables_rules(*floating_ebtables_rules(fixed_ip, network))
