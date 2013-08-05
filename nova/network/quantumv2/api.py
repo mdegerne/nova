@@ -97,6 +97,23 @@ class API(base.Base):
     def setup_networks_on_host(self, context, instance, host=None,
                                teardown=False):
         """Setup or teardown the network structures."""
+        if not teardown and self._has_port_binding_extension():
+            # (dscannell) If Quantum supports the port binding than update
+            # host binding on the port for the instance. Note that teardown
+            # is ignored because setuping the network on one host will
+            # automatically cause it to be torn down on other hosts.
+            search_opts={'tenant_id': instance['project_id'],
+                         'device_id': instance['uuid']}
+            client = quantumv2.get_client(context, admin=True)
+            data = client.list_ports(**search_opts)
+            ports = data.get('ports', [])
+
+            for port in ports:
+                zone = 'compute:%s' % (instance['availability_zone'])
+                port_req_body = {'port': {'device_id': instance['uuid'],
+                                          'device_owner': zone,
+                                          'binding:host_id': host}}
+                client.update_port(port['id'], port_req_body)
 
     def _get_available_networks(self, context, project_id,
                                 net_ids=None):
